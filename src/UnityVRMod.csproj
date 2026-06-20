@@ -10,7 +10,7 @@
     <WarningLevel>8</WarningLevel>
     <RootNamespace>UnityVRMod</RootNamespace>
     <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>    
-	<Configurations>BIE_Unity_Mono_OpenVR_Debug;BIE_Unity_Mono_OpenVR_Release;BIE_Unity_Cpp_OpenVR_Debug;BIE_Unity_Cpp_OpenVR_Release;BIE_Unity_Mono_OpenXR_Debug;BIE_Unity_Mono_OpenXR_Release;BIE_Unity_Cpp_OpenXR_Debug;BIE_Unity_Cpp_OpenXR_Release</Configurations>
+	<Configurations>BIE_Unity_Mono_OpenXR_Debug;BIE_Unity_Mono_OpenXR_Release;BIE_Unity_Cpp_OpenXR_Debug;BIE_Unity_Cpp_OpenXR_Release</Configurations>
     <NoWarn>$(NoWarn);NU1603</NoWarn>
   </PropertyGroup>
 
@@ -23,50 +23,6 @@
     <Exec Condition="$(DefineConstants.Contains('MONO')) AND $(DefineConstants.Contains('BIE'))" Command="dotnet build ..\UniverseLib\src\UniverseLib.sln -c Release_Mono" />
   </Target>
 
-  <!-- BepInEx Unity MONO - OpenVR - DEBUG -->
-  <PropertyGroup Condition="'$(Configuration)'=='BIE_Unity_Mono_OpenVR_Debug'">
-    <TargetFramework>net46</TargetFramework>
-    <OutputPath>..\Release\OpenVR\UnityVRMod.BepInEx.Mono.Debug\</OutputPath>
-    <DefineConstants>DEBUG,MONO,BIE,ENABLE_VDEBUG_LOGGING,OPENVR_BUILD</DefineConstants>
-    <AssemblyName>UnityVRMod.BepInEx.Mono_OpenVR</AssemblyName>
-    <Optimize>false</Optimize>
-    <DebugSymbols>true</DebugSymbols>
-    <DebugType>portable</DebugType>
-  </PropertyGroup>
-
-  <!-- BepInEx Unity MONO - OpenVR - RELEASE -->
-  <PropertyGroup Condition="'$(Configuration)'=='BIE_Unity_Mono_OpenVR_Release'">
-    <TargetFramework>net46</TargetFramework>
-    <OutputPath>..\Release\OpenVR\UnityVRMod.BepInEx.Mono\</OutputPath>
-    <DefineConstants>MONO,BIE,OPENVR_BUILD</DefineConstants>
-    <AssemblyName>UnityVRMod.BepInEx.Mono_OpenVR</AssemblyName>
-    <Optimize>true</Optimize>
-    <DebugSymbols>false</DebugSymbols>
-    <DebugType>none</DebugType>
-  </PropertyGroup>
-
-  <!-- BepInEx Unity IL2CPP - OpenVR - DEBUG -->
-  <PropertyGroup Condition="'$(Configuration)'=='BIE_Unity_Cpp_OpenVR_Debug'">
-    <TargetFramework>net6.0</TargetFramework>
-    <OutputPath>..\Release\OpenVR\UnityVRMod.BepInEx.IL2CPP.Debug\</OutputPath>
-    <DefineConstants>DEBUG,CPP,BIE,INTEROP,ENABLE_VDEBUG_LOGGING,OPENVR_BUILD</DefineConstants>
-    <AssemblyName>UnityVRMod.BepInEx.IL2CPP_OpenVR</AssemblyName>
-    <Optimize>false</Optimize>
-    <DebugSymbols>true</DebugSymbols>
-    <DebugType>portable</DebugType>
-  </PropertyGroup>
-
-  <!-- BepInEx Unity IL2CPP - OpenVR - RELEASE -->
-  <PropertyGroup Condition="'$(Configuration)'=='BIE_Unity_Cpp_OpenVR_Release'">
-    <TargetFramework>net6.0</TargetFramework>
-    <OutputPath>..\Release\OpenVR\UnityVRMod.BepInEx.IL2CPP\</OutputPath>
-    <DefineConstants>CPP,BIE,INTEROP,OPENVR_BUILD</DefineConstants>
-    <AssemblyName>UnityVRMod.BepInEx.IL2CPP_OpenVR</AssemblyName>
-    <Optimize>true</Optimize>
-    <DebugSymbols>false</DebugSymbols>
-    <DebugType>none</DebugType>
-  </PropertyGroup>
-  
   <!-- BepInEx Unity MONO - OpenXR - DEBUG -->
   <PropertyGroup Condition="'$(Configuration)'=='BIE_Unity_Mono_OpenXR_Debug'">
     <TargetFramework>net46</TargetFramework>
@@ -113,18 +69,17 @@
 
   <!-- Conditional Source File Compilation -->
   <ItemGroup>
-    <Compile Remove="Features\VRVisualization\VrCameraSetup_CoreOpenVR.cs" />
-    <Compile Remove="Features\VRVisualization\OpenVR\OpenVR.cs" /> 
     <Compile Remove="Features\VRVisualization\VrCameraSetup_CoreOpenXR.cs" />
-    <Compile Remove="Features\VRVisualization\OpenXR\OpenXR.cs" /> 
-    <Compile Remove="Features\VRVisualization\OpenXR\NativeBridge.cs" /> 
-
-    <Compile Include="Features\VRVisualization\VrCameraSetup_CoreOpenVR.cs" Condition="$(DefineConstants.Contains('OPENVR_BUILD'))" />
-    <Compile Include="Features\VRVisualization\OpenVR\OpenVR.cs" Condition="$(DefineConstants.Contains('OPENVR_BUILD'))" />
+    <Compile Remove="Features\VRVisualization\OpenXR\OpenXR.cs" />
+    <Compile Remove="Features\VRVisualization\OpenXR\NativeBridge.cs" />
+    <Compile Remove="Features\VRVisualization\OpenXR\OpenXRInput.cs" />
+    <Compile Remove="Features\VRVisualization\OpenXR\QuadLayerSwapchain.cs" />
 
     <Compile Include="Features\VRVisualization\VrCameraSetup_CoreOpenXR.cs" Condition="$(DefineConstants.Contains('OPENXR_BUILD'))" />
     <Compile Include="Features\VRVisualization\OpenXR\OpenXR.cs" Condition="$(DefineConstants.Contains('OPENXR_BUILD'))" />
     <Compile Include="Features\VRVisualization\OpenXR\NativeBridge.cs" Condition="$(DefineConstants.Contains('OPENXR_BUILD'))" />
+    <Compile Include="Features\VRVisualization\OpenXR\OpenXRInput.cs" Condition="$(DefineConstants.Contains('OPENXR_BUILD'))" />
+    <Compile Include="Features\VRVisualization\OpenXR\QuadLayerSwapchain.cs" Condition="$(DefineConstants.Contains('OPENXR_BUILD'))" />
   </ItemGroup>
 
   <!-- il2cpp Interop nuget -->
@@ -217,14 +172,6 @@
       <HintPath>..\lib\cpp\Il2CppInterop.Runtime.dll</HintPath>
       <Private>False</Private>
     </Reference>
-  </ItemGroup>
-  
-  <!-- OpenVR API Native DLL (Conditional Copy to Output) -->
-  <ItemGroup Condition="$(DefineConstants.Contains('OPENVR_BUILD'))">
-    <None Include="..\lib\openvr_api.dll">
-      <Link>openvr_api.dll</Link>
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
   </ItemGroup>
   
   <!-- OpenXR Native DLL (Conditional Copy to Output) -->
