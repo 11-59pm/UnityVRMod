@@ -157,10 +157,10 @@ namespace UnityVRMod.Features.VrVisualization
             return setup != null && setup.SetTransitionOverlayTexture(nativeTex, srcWidth, srcHeight, uMin, vMin, uMax, vMax);
         }
 
-        internal bool SetTransitionOverlayState(bool visible, float alpha, float widthMeters, float distanceMeters)
+        internal bool SetTransitionOverlayState(bool visible, float alpha, float widthMeters, float distanceMeters, bool worldLock)
         {
             var setup = _cameraSetup;
-            return setup != null && setup.SetTransitionOverlayState(visible, alpha, widthMeters, distanceMeters);
+            return setup != null && setup.SetTransitionOverlayState(visible, alpha, widthMeters, distanceMeters, worldLock);
         }
 
         // eye cullingMask/clearFlags override の passthrough。fade/overlay と同じく IsVrReady ガードしない

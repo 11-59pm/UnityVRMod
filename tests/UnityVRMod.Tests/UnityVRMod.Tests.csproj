@@ -26,6 +26,7 @@
     <Compile Include="..\..\src\Core\OpenXrMath.cs" Link="Linked\OpenXrMath.cs" />
     <Compile Include="..\..\src\Core\FramePumpPolicy.cs" Link="Linked\FramePumpPolicy.cs" />
     <Compile Include="..\..\src\Core\OverlayQuadMath.cs" Link="Linked\OverlayQuadMath.cs" />
+    <Compile Include="..\..\src\Core\TransitionAnchorMath.cs" Link="Linked\TransitionAnchorMath.cs" />
     <Compile Include="..\..\src\Core\StandbyPolicy.cs" Link="Linked\StandbyPolicy.cs" />
     <Compile Include="..\..\src\Core\EyeRtPolicy.cs" Link="Linked\EyeRtPolicy.cs" />
     <Compile Include="..\..\src\Core\OverlayDrawOrder.cs" Link="Linked\OverlayDrawOrder.cs" />

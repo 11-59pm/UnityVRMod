@@ -55,10 +55,11 @@
         // mask=0 で無効。VR 未 init は no-op。
         void SetVrModelOverlay(int mask);
 
-        // VR トランジション overlay: 遷移絵柄テクスチャを HMD 固定 overlay として表示する。
+        // VR トランジション overlay: 遷移絵柄テクスチャを overlay として表示する。
         // SetCompositorFade と同じく session レベル（rig teardown 中も有効）。未対応 backend は false。
+        // worldLock=true で頭ロックでなく world 固定（可視 rising edge で anchor を凍結）。
         bool SetTransitionOverlayTexture(System.IntPtr nativeTex, int srcWidth, int srcHeight, float uMin, float vMin, float uMax, float vMax);
-        bool SetTransitionOverlayState(bool visible, float alpha, float widthMeters, float distanceMeters);
+        bool SetTransitionOverlayState(bool visible, float alpha, float widthMeters, float distanceMeters, bool worldLock);
 
         // 遷移 teardown 中（rig 不在・セッション生存）の compositor keepalive。
         // WaitGetPoses + 前フレーム eye texture の再 submit を 1 フレーム分行う（Camera.Render なし）。

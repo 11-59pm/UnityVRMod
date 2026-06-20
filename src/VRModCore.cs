@@ -122,8 +122,9 @@ namespace UnityVRMod.Core
         public static bool SetTransitionOverlayTexture(System.IntPtr nativeTex, int srcWidth, int srcHeight, float uMin, float vMin, float uMax, float vMax)
             => VrVisualizationFeature?.SetTransitionOverlayTexture(nativeTex, srcWidth, srcHeight, uMin, vMin, uMax, vMax) ?? false;
 
-        public static bool SetTransitionOverlayState(bool visible, float alpha, float widthMeters, float distanceMeters)
-            => VrVisualizationFeature?.SetTransitionOverlayState(visible, alpha, widthMeters, distanceMeters) ?? false;
+        // worldLock=true で world 固定（頭ロックでなく可視 rising edge の頭正面に固定）。
+        public static bool SetTransitionOverlayState(bool visible, float alpha, float widthMeters, float distanceMeters, bool worldLock)
+            => VrVisualizationFeature?.SetTransitionOverlayState(visible, alpha, widthMeters, distanceMeters, worldLock) ?? false;
 
         // eye の cullingMask/clearFlags override（companion の EyeCullingCoordinator が所有）。
         // active=false で fork の game-copy へ戻す。VR 未 init は no-op。

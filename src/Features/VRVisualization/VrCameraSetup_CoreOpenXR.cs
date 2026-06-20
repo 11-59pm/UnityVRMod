@@ -102,6 +102,13 @@ namespace UnityVRMod.Features.VrVisualization
         private RenderTexture _overlayRT;       // crop+flip+format を焼き込む intermediate（OVERLAY_TEX_SIZE 正方）
         private QuadLayerSwapchain _overlaySwapchain;
         private IntPtr _pOverlayLayer = IntPtr.Zero;
+        // world 固定モード（companion VrTransitionOverlayWorldLock）。ON のとき overlay quad を
+        // 頭ロック VIEW space でなく app space に固定する。anchor は可視 rising edge で 1 回だけ凍結する。
+        private bool _overlayWorldLock;
+        private bool _prevOverlayVisible;       // 可視 rising edge 検出用（PumpFrame の単一地点で更新）
+        private bool _overlayAnchorValid;       // false = locate 失敗/水平退化 → 当セッションは頭ロック fallback
+        private XrVector3f _overlayAnchorPos;   // app space に凍結した quad 中心（RH）
+        private XrQuaternionf _overlayAnchorOri;// app space に凍結した quad 姿勢（yaw のみ・RH）
 
         private CameraClearFlags _mainCameraClearFlags;
         private Color _mainCameraBackgroundColor;
@@ -639,6 +646,10 @@ namespace UnityVRMod.Features.VrVisualization
                 }
             }
 
+            // world 固定 overlay の anchor を可視 rising edge で 1 回だけ凍結する（PumpFrame の単一地点）。
+            // shouldRender ブロック外＝通常 Update / teardown keepalive どちらの PumpFrame 経路でも必ず通過する。
+            MaybeSnapshotOverlayAnchor();
+
             // layer 集約: [projection?][fade?][overlay?] を _pLayersForSubmit へ詰める。
             // shouldRender==false でも fade/overlay は submit する（head-lock quad は eye 非依存・teardown 中も継続）。
             // quad swapchain の acquire/wait/release は begin/end frame 間なら shouldRender に関係なく合法。
@@ -823,6 +834,35 @@ namespace UnityVRMod.Features.VrVisualization
             return true;
         }
 
+        // 可視 rising edge（hidden→visible）で頭 pose を app space に取得し、world 固定 anchor を 1 回だけ凍結する。
+        // _appSpace は session 所有（rig 非依存）＝ teardown 中（eye GO 破棄後）でも locate 有効。
+        // locate 失敗 / 水平退化（真上下凝視）→ _overlayAnchorValid=false ＝ PrepareOverlayLayer が頭ロック fallback する。
+        private void MaybeSnapshotOverlayAnchor()
+        {
+            bool rising = _overlayVisible && !_prevOverlayVisible;
+            _prevOverlayVisible = _overlayVisible;
+            if (!rising || !_overlayWorldLock) return;
+
+            _overlayAnchorValid = false;
+            if (_viewSpace == OpenXRConstants.XR_NULL_HANDLE) return;
+
+            var loc = new XrSpaceLocation { type = XrStructureType.XR_TYPE_SPACE_LOCATION };
+            if (OpenXRAPI.xrLocateSpace(_viewSpace, _appSpace, _xrFrameState.predictedDisplayTime, ref loc) < 0) return;
+            bool posValid = (loc.locationFlags & XrSpaceLocationFlags.XR_SPACE_LOCATION_POSITION_VALID_BIT) != 0;
+            bool oriValid = (loc.locationFlags & XrSpaceLocationFlags.XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) != 0;
+            if (!posValid || !oriValid) return; // 初回 Sync 前の無効時刻 locate もここで弾く
+
+            // 生 XrPosef 成分（RH・LH 変換なし）を TransitionAnchorMath へ渡す。
+            var headPos = new Vector3(loc.pose.position.x, loc.pose.position.y, loc.pose.position.z);
+            var headOri = new Quaternion(loc.pose.orientation.x, loc.pose.orientation.y, loc.pose.orientation.z, loc.pose.orientation.w);
+            if (!TransitionAnchorMath.ComputeWorldAnchor(headPos, headOri, _overlayDistanceM, out Vector3 anchorPos, out float yaw))
+                return; // 水平退化 → 頭ロック fallback
+
+            _overlayAnchorPos = new XrVector3f { x = anchorPos.x, y = anchorPos.y, z = anchorPos.z };
+            _overlayAnchorOri = new XrQuaternionf { x = 0f, y = Mathf.Sin(yaw * 0.5f), z = 0f, w = Mathf.Cos(yaw * 0.5f) };
+            _overlayAnchorValid = true;
+        }
+
         // source 遷移絵柄（BG2VR の ARGB32 RT native ptr）を external texture として wrap し、
         // crop+flip+format を OVERLAY_TEX_SIZE 正方の intermediate RT へ Blit で焼き込んでから overlay
         // swapchain へ stage し、quad layer を _pOverlayLayer へ marshal する。
@@ -860,12 +900,18 @@ namespace UnityVRMod.Features.VrVisualization
             // aspect は atlas 全体でなく UV crop 後の実効画素比で復元する（atlas sub-rect の歪み防止）。
             UnityVRMod.Core.OverlayQuadMath.CroppedPixelSize(_overlaySrcW, _overlaySrcH, _overlayUMin, _overlayVMin, _overlayUMax, _overlayVMax, out int cropW, out int cropH);
             UnityVRMod.Core.OverlayQuadMath.QuadSize(_overlayWidthM, cropW, cropH, out float qw, out float qh);
+            // world 固定（anchor 凍結済）なら app space + 凍結 pose、それ以外は従来の VIEW space 頭ロック（byte 等価）。
+            bool worldLocked = _overlayWorldLock && _overlayAnchorValid;
+            ulong quadSpace = worldLocked ? _appSpace : _viewSpace;
+            XrPosef quadPose = worldLocked
+                ? new XrPosef { orientation = _overlayAnchorOri, position = _overlayAnchorPos }
+                : new XrPosef { orientation = new XrQuaternionf { w = 1f }, position = new XrVector3f { x = 0f, y = 0f, z = -_overlayDistanceM } };
             var quad = new XrCompositionLayerQuad
             {
                 type = XrStructureType.XR_TYPE_COMPOSITION_LAYER_QUAD,
                 next = IntPtr.Zero,
                 layerFlags = XrCompositionLayerFlags.XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT | XrCompositionLayerFlags.XR_COMPOSITION_LAYER_UNPREMULTIPLIED_ALPHA_BIT,
-                space = _viewSpace,
+                space = quadSpace,
                 eyeVisibility = XrEyeVisibility.XR_EYE_VISIBILITY_BOTH,
                 subImage = new XrSwapchainSubImage
                 {
@@ -873,7 +919,7 @@ namespace UnityVRMod.Features.VrVisualization
                     imageRect = new XrRect2Di { offset = new XrOffset2Di { x = 0, y = 0 }, extent = new XrExtent2Di { width = _overlaySwapchain.Width, height = _overlaySwapchain.Height } },
                     imageArrayIndex = 0,
                 },
-                pose = new XrPosef { orientation = new XrQuaternionf { w = 1f }, position = new XrVector3f { x = 0f, y = 0f, z = -_overlayDistanceM } },
+                pose = quadPose,
                 size = new XrExtent2Df { width = qw, height = qh },
             };
             Marshal.StructureToPtr(quad, _pOverlayLayer, false);
@@ -1351,14 +1397,15 @@ namespace UnityVRMod.Features.VrVisualization
             return true; // 実 Blit は PumpFrame で。
         }
 
-        public bool SetTransitionOverlayState(bool visible, float alpha, float widthMeters, float distanceMeters)
+        public bool SetTransitionOverlayState(bool visible, float alpha, float widthMeters, float distanceMeters, bool worldLock)
         {
             if (!IsVrAvailable || _viewSpace == OpenXRConstants.XR_NULL_HANDLE || _overlaySwapchain == null) return false;
             _overlayVisible = visible;
             _overlayAlpha = alpha;
             _overlayWidthM = widthMeters;
             _overlayDistanceM = distanceMeters;
-            return true; // submit は PumpFrame で（visible のときのみ append）。
+            _overlayWorldLock = worldLock;
+            return true; // submit は PumpFrame で（visible のときのみ append）。anchor 凍結は MaybeSnapshotOverlayAnchor。
         }
 
         // 遷移 teardown / カメラ未解決中（rig 不在・session 生存）の compositor keepalive。
