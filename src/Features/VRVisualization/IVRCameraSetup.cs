@@ -20,6 +20,10 @@
         VrCameraRig GetVrCameraGameObjects();
         void UpdatePoses();
 
+        // 正面リセット: 次フレームで _appSpace を「今の頭 pose が新原点・正面」になるよう作り直す（システムメニュー
+        // の Reset View 相当）。eye / コントローラ / world-locked overlay は全て _appSpace 基準のため一括で整合する。
+        void RequestRecenter();
+
         // --- METHODS FOR LIVE RELOADING ---
         void SetWorldScale(float newWorldScale, Camera mainCamera);
         void SetCameraNearClip(float newNearClip);

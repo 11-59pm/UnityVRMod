@@ -28,6 +28,9 @@ namespace UnityVRMod.Features.VRVisualization.OpenXR
         // 0.5 が妥当な公算が高いため Phase1 は const + 実機確認に留める。NG なら Phase2 で ConfigManager 化。
         private const float GripThreshold = 0.5f;
 
+        /// <summary>recenter で _appSpace を作り直した際に、入力側 cache を新ハンドルへ再ポイントする。</summary>
+        public void SetAppSpace(ulong appSpace) => _appSpace = appSpace;
+
         public bool Setup(ulong instance, ulong session, ulong appSpace)
         {
             _instance = instance; _session = session; _appSpace = appSpace;

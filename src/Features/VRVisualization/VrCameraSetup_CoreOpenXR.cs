@@ -33,6 +33,10 @@ namespace UnityVRMod.Features.VrVisualization
         private ulong _appSpace = OpenXRConstants.XR_NULL_HANDLE;
         private bool _isSessionRunning = false;
         private XrReferenceSpaceType _appSpaceType = XrReferenceSpaceType.XR_REFERENCE_SPACE_TYPE_LOCAL;
+        // 正面リセット: 現在の _appSpace を作った poseInReferenceSpace（natural STAGE/LOCAL 原点基準）。
+        // recenter のたびに delta を合成して累積し、_appSpace を作り直す。初期 = identity。
+        private XrPosef _appSpacePoseOffset = new XrPosef { orientation = new XrQuaternionf { w = 1f } };
+        private bool _recenterPending;
         private XrView[] _locatedViews;
         private XrViewState _locatedViewState;
 
@@ -302,6 +306,10 @@ namespace UnityVRMod.Features.VrVisualization
                 if (_appSpace == OpenXRConstants.XR_NULL_HANDLE) throw new Exception("Failed to create any reference space.");
                 VRModCore.Log($"Created {_appSpaceType} space.");
 
+                // 新規 _appSpace は identity offset で生成されている。recenter 累積と pending をリセットして整合させる。
+                _appSpacePoseOffset = new XrPosef { orientation = new XrQuaternionf { w = 1f } };
+                _recenterPending = false;
+
                 // head-lock 用 VIEW space（fade/overlay quad 用）。失敗は致命でない（fade/overlay のみ無効）。
                 var viewSpaceInfo = new XrReferenceSpaceCreateInfo { type = XrStructureType.XR_TYPE_REFERENCE_SPACE_CREATE_INFO, referenceSpaceType = XrReferenceSpaceType.XR_REFERENCE_SPACE_TYPE_VIEW, poseInReferenceSpace = new XrPosef { orientation = new XrQuaternionf { w = 1f } } };
                 if (OpenXRAPI.xrCreateReferenceSpace(_xrSession, in viewSpaceInfo, out _viewSpace) < 0)
@@ -550,6 +558,10 @@ namespace UnityVRMod.Features.VrVisualization
             var frameWaitInfo = new XrFrameWaitInfo { type = XrStructureType.XR_TYPE_FRAME_WAIT_INFO };
             _xrFrameState.type = XrStructureType.XR_TYPE_FRAME_STATE;
             OpenXRAPI.xrWaitFrame(_xrSession, in frameWaitInfo, out _xrFrameState);
+
+            // 正面リセット要求があれば _appSpace を作り直す（_input.Sync / xrLocateViews より前＝同フレームで
+            // eye とコントローラ両方に新 space を効かせ、コントローラの 1 フレーム遅延を避ける）。
+            TryApplyRecenter();
 
             // predictedDisplayTime 確定後に入力を同期（pose の xrLocateSpace が同フレームの予測時刻を使える）。
             _input.Sync(_xrFrameState.predictedDisplayTime);
@@ -861,6 +873,88 @@ namespace UnityVRMod.Features.VrVisualization
             _overlayAnchorPos = new XrVector3f { x = anchorPos.x, y = anchorPos.y, z = anchorPos.z };
             _overlayAnchorOri = new XrQuaternionf { x = 0f, y = Mathf.Sin(yaw * 0.5f), z = 0f, w = Mathf.Cos(yaw * 0.5f) };
             _overlayAnchorValid = true;
+        }
+
+        // IVrCameraSetup.RequestRecenter。即時には触らず pending を立て、次の PumpFrame 先頭で適用する
+        //（valid な頭 pose と predictedDisplayTime が要るため）。
+        public void RequestRecenter() => _recenterPending = true;
+
+        // pending な正面リセットを適用する。PumpFrame の xrWaitFrame 後・_input.Sync / xrLocateViews 前で呼ぶ
+        //（同フレームで eye とコントローラ両方に新 _appSpace を効かせる）。valid pose が無ければ pending を保持して次フレーム再試行。
+        private void TryApplyRecenter()
+        {
+            if (!_recenterPending) return;
+            if (!_isSessionRunning
+                || _viewSpace == OpenXRConstants.XR_NULL_HANDLE
+                || _appSpace == OpenXRConstants.XR_NULL_HANDLE
+                || OpenXRAPI.xrCreateReferenceSpace == null)
+            {
+                // 構造的に不可能（未対応 loader 等）→ spin を避けて諦める。可能性のある未確定（session/space）は保持。
+                if (OpenXRAPI.xrCreateReferenceSpace == null) _recenterPending = false;
+                return;
+            }
+
+            var loc = new XrSpaceLocation { type = XrStructureType.XR_TYPE_SPACE_LOCATION };
+            if (OpenXRAPI.xrLocateSpace(_viewSpace, _appSpace, _xrFrameState.predictedDisplayTime, ref loc) < 0)
+                return; // locate 失敗 → 次フレーム再試行（pending 保持）
+            bool posValid = (loc.locationFlags & XrSpaceLocationFlags.XR_SPACE_LOCATION_POSITION_VALID_BIT) != 0;
+            bool oriValid = (loc.locationFlags & XrSpaceLocationFlags.XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) != 0;
+            if (!posValid || !oriValid) return; // valid pose 待ち（起動直後 / トラッキングロスト）
+
+            // 頭 pose H（_appSpace 基準・RH）から yaw-only delta D を作る。高さは維持（y=0）。
+            var q = loc.pose.orientation;
+            float yawMag = Mathf.Sqrt(q.y * q.y + q.w * q.w); // Y 軸 twist 成分（pitch/roll を落とす）
+            XrQuaternionf dOri = yawMag < 1e-6f
+                ? new XrQuaternionf { w = 1f }
+                : new XrQuaternionf { y = q.y / yawMag, w = q.w / yawMag };
+            var dPos = new XrVector3f { x = loc.pose.position.x, y = 0f, z = loc.pose.position.z };
+
+            // newOffset = Compose(oldOffset, D)。D を旧 offset 座標系で適用し natural 原点基準の新 offset を得る。
+            XrPosef newOffset = ComposePose(_appSpacePoseOffset, dOri, dPos);
+
+            var createInfo = new XrReferenceSpaceCreateInfo
+            {
+                type = XrStructureType.XR_TYPE_REFERENCE_SPACE_CREATE_INFO,
+                referenceSpaceType = _appSpaceType,
+                poseInReferenceSpace = newOffset,
+            };
+            if (OpenXRAPI.xrCreateReferenceSpace(_xrSession, in createInfo, out ulong newSpace) < 0
+                || newSpace == OpenXRConstants.XR_NULL_HANDLE)
+            {
+                VRModCore.LogWarning("OpenXR: 正面リセット用 reference space の生成に失敗。現状維持。");
+                _recenterPending = false; // hard failure → 無限リトライしない（ユーザーは再ジェスチャで再試行可）
+                return;
+            }
+
+            ulong old = _appSpace;
+            _appSpace = newSpace;
+            _appSpacePoseOffset = newOffset;
+            _input.SetAppSpace(_appSpace); // 入力側 cache を新ハンドルへ
+            if (old != OpenXRConstants.XR_NULL_HANDLE && OpenXRAPI.xrDestroySpace != null)
+                OpenXRAPI.xrDestroySpace(old);
+            // world-locked overlay の anchor（_overlayAnchorPos/Ori）は旧 _appSpace 座標で凍結されている。
+            // 原点が動いたので無効化し、次の可視 rising edge まで頭ロック fallback へ倒す
+            //（recenter 適用時に overlay が瞬間移動するのを防ぐ）。
+            _overlayAnchorValid = false;
+            _recenterPending = false;
+            VRModCore.Log("OpenXR: 正面リセット（reference space recenter）を適用。");
+        }
+
+        // 剛体 pose 合成 result = A ∘ {dOri, dPos}（D を A 座標系で適用）。
+        // 成分は OpenXR RH のまま UnityEngine.Quaternion/Vector3 で代数計算する（MaybeSnapshotOverlayAnchor と同方式・
+        // RH→LH 変換は挟まない）。A.orientation は yaw-only 前提。
+        private static XrPosef ComposePose(XrPosef a, XrQuaternionf dOri, XrVector3f dPos)
+        {
+            var aOri = new Quaternion(a.orientation.x, a.orientation.y, a.orientation.z, a.orientation.w);
+            var dOriU = new Quaternion(dOri.x, dOri.y, dOri.z, dOri.w);
+            Quaternion rOri = aOri * dOriU;
+            Vector3 rPos = new Vector3(a.position.x, a.position.y, a.position.z)
+                         + aOri * new Vector3(dPos.x, dPos.y, dPos.z);
+            return new XrPosef
+            {
+                orientation = new XrQuaternionf { x = rOri.x, y = rOri.y, z = rOri.z, w = rOri.w },
+                position = new XrVector3f { x = rPos.x, y = rPos.y, z = rPos.z },
+            };
         }
 
         // source 遷移絵柄（BG2VR の ARGB32 RT native ptr）を external texture として wrap し、
