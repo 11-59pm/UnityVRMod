@@ -175,20 +175,20 @@ namespace UnityVRMod.Config
                 "Defines the behavior of the Safe Mode toggle. Fast is quickest. RigReinit tears down the rig but keeps the session. FullVrReinit fully reinitializes the VR subsystem (default; cleanest reset).", SafeModeLevel.FullVrReinitOnToggle);
 
             EnableAutomaticSafeMode = new ConfigElement<bool>("Enable Automatic Safe Mode",
-                "If true, VR rendering will be temporarily disabled during scene loads or when the game's main camera changes.", true);
+                "If true, VR rendering will be temporarily disabled during scene loads or when the game's main camera changes.", false);
 
             AutomaticSafeModeDurationSecs = new ConfigElement<float>("Automatic Safe Mode Duration",
-                "The time (in seconds) that automatic safe mode will remain active.", 1.0f);
+                "The time (in seconds) that automatic safe mode will remain active.", 3.0f);
 
             EnableRuntimeDebugLogging = new ConfigElement<bool>("Enable Runtime Debug Logging",
                 "Enables detailed, non-spammy debug messages to be printed to the console.", false);
 
             AssertedCameraOverrides = new ConfigElement<string>("Asserted Camera Overrides",
                 "Manual overrides for camera detection if heuristics fail. Format: 'SceneName|GameObjectPath;GameObjectPath2'. Use full hierarchy or just the name. An empty scene name applies the override to all scenes.",
-                "");
+                "HoleFix|/HoleSceneProxy/HoleScene/CubemapMakeOffUseOn/CameraSetting/Center/CameraRotation/GameCamera");
 
             DisableDesktopView = new ConfigElement<bool>("Disable Desktop View",
-                "If true, the game's flat view on the monitor is not rendered while VR is actively rendering, saving GPU. The monitor shows a blank (cleared) view during VR. No effect while VR rendering is paused (Safe Mode).", false);
+                "If true, the game's flat view on the monitor is not rendered while VR is actively rendering, saving GPU. The monitor shows a blank (cleared) view during VR. No effect while VR rendering is paused (Safe Mode).", true);
             DisableDesktopView.OnValueChanged += value => VRModCore.VrVisualizationFeature?.LiveUpdateDesktopView(value);
 
             VRModCore.Log($"Finished creating {ConfigElements.Count + InternalConfigs.Count} config elements.");
