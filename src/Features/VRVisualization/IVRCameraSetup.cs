@@ -59,6 +59,10 @@
         // mask=0 で無効。VR 未 init は no-op。
         void SetVrModelOverlay(int mask);
 
+        // 後段 transparent redraw callback。Camera.Render() 後・DrawEyeOverlay() 前に呼ぶ。
+        // companion(BG2VR TransparentRedrawRunner) が登録。null で無効。
+        void SetSceneTransparentRedraw(System.Action<Camera, RenderTexture> callback);
+
         // VR トランジション overlay: 遷移絵柄テクスチャを overlay として表示する。
         // SetCompositorFade と同じく session レベル（rig teardown 中も有効）。未対応 backend は false。
         // worldLock=true で頭ロックでなく world 固定（可視 rising edge で anchor を凍結）。

@@ -150,6 +150,11 @@ namespace UnityVRMod.Core
         public static void SetVrModelOverlay(int mask)
             => VrVisualizationFeature?.SetVrModelOverlay(mask);
 
+        /// <summary>後段 transparent redraw callback。Camera.Render 後・DrawEyeOverlay 前。
+        /// renderQueue を使わずに透過描画順を復元する。null で無効。</summary>
+        public static void SetSceneTransparentRedraw(System.Action<UnityEngine.Camera, UnityEngine.RenderTexture> callback)
+            => VrVisualizationFeature?.SetSceneTransparentRedraw(callback);
+
         // 正面リセット: 次フレームで _appSpace を「今の頭 pose が新原点・正面」へ作り直す（companion の
         // RecenterRunner が起動時 / 両手 Grip 長押しで呼ぶ）。VR 未 init / session 非生存は no-op（pending のみ）。
         public static void RequestRecenter()

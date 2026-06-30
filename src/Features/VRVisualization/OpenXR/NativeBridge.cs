@@ -48,6 +48,33 @@ namespace UnityVRMod.Features.VRVisualization.OpenXR
         [DllImport(NativeHelperDll, CallingConvention = CallingConvention.Cdecl, EntryPoint = "CancelPendingCopiesD3D12")]
         public static extern void CancelPendingCopiesD3D12_Internal();
 
+        [DllImport(NativeHelperDll, CallingConvention = CallingConvention.Cdecl, EntryPoint = "QueryVideoMemoryInfo")]
+        private static extern int QueryVideoMemoryInfo_Internal(
+            out ulong localCurrent, out ulong localBudget,
+            out ulong nonLocalCurrent, out ulong nonLocalBudget);
+
+        /// <summary>
+        /// 診断用: IDXGIAdapter3::QueryVideoMemoryInfo の LOCAL / NON_LOCAL を取得する。
+        /// 旧 dll（QueryVideoMemoryInfo 未 export）と一緒に動いても CrashGuard で false 返却＝呼び出し側は無視する設計。
+        /// </summary>
+        public static bool TryQueryDxgiVideoMemoryInfo(
+            out ulong localCurrentBytes, out ulong localBudgetBytes,
+            out ulong nonLocalCurrentBytes, out ulong nonLocalBudgetBytes)
+        {
+            try
+            {
+                return QueryVideoMemoryInfo_Internal(
+                    out localCurrentBytes, out localBudgetBytes,
+                    out nonLocalCurrentBytes, out nonLocalBudgetBytes) != 0;
+            }
+            catch
+            {
+                localCurrentBytes = 0; localBudgetBytes = 0;
+                nonLocalCurrentBytes = 0; nonLocalBudgetBytes = 0;
+                return false;
+            }
+        }
+
         public const int kEventCacheDeviceObjects = 1;
         public const int kEventExecutePendingCopies = 2;
 

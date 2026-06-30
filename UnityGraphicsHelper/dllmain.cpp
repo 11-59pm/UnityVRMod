@@ -15,6 +15,9 @@
 #include "IUnityGraphicsD3D11.h"
 #include <d3d12.h>
 #include "IUnityGraphicsD3D12.h"
+#include <dxgi.h>
+#include <dxgi1_4.h>
+#pragma comment(lib, "dxgi.lib")
 
 #ifndef E_FAIL
 #define E_FAIL 0x80004005
@@ -46,6 +49,10 @@ static CopyCmdSlot s_copySlots[kCopySlotCount] = {};
 // init 一発 event で render thread から取得して cache する device/queue
 static void* volatile s_cachedD3D12Device = nullptr;
 static void* volatile s_cachedD3D12Queue = nullptr;
+
+// DXGI memory info 用 adapter cache（QueryVideoMemoryInfo 経路。診断用）。
+// 初回呼び出しで device→LUID→Factory→Adapter3 を解決し以降は使い回す。
+static IDXGIAdapter3* s_cachedDxgiAdapter3 = nullptr;
 
 enum { kEventCacheDeviceObjects = 1, kEventExecutePendingCopies = 2 };
 
@@ -116,6 +123,12 @@ extern "C" __declspec(dllexport) void UnityPluginUnload()
         s_ImmediateContext = nullptr;
     }
     g_D3D11Device = nullptr;
+
+    if (s_cachedDxgiAdapter3)
+    {
+        s_cachedDxgiAdapter3->Release();
+        s_cachedDxgiAdapter3 = nullptr;
+    }
 }
 
 extern "C" __declspec(dllexport) void SetDevicePointerFromCSharp(void* deviceFromCSharp)
@@ -325,6 +338,39 @@ extern "C" __declspec(dllexport) int GetCompletedCopyTicket()
     return (int)s_completedTicket;
 }
 
+// Step 2 診断: GPU 完了まで強制待ち（恒久 fix ではなく leak rate 計測用）。
+// 既存 WaitForCopyTicket は ExecuteCommandList の submit 完了までしか待たない。本関数は Unity 共有 frame fence
+// の `GetCompletedValue() >= slot->fenceValue` まで待つ＝コピーコマンドの GPU 完了まで。
+// ticket 引数は記録目的（個別 slot を引かず、全 slot の最大 fenceValue で待つ＝累積分も巻き込んで完了させる）。
+// 戻り値: 1=完了, 0=timeout/error.
+extern "C" __declspec(dllexport) int WaitForCopyGpuComplete(int /*ticket*/, int timeoutMs)
+{
+    if (!s_D3D12) return 1;
+    ID3D12Fence* frameFence = s_D3D12->GetFrameFence();
+    if (!frameFence) return 1;
+
+    // 全 slot の最大 fenceValue を取得。fenceValue は UINT64 = 8byte aligned write が x64 で atomic ＝
+    // race の悪影響は古い値を読む程度（safe-by-construction で実害は「過小評価して早期 return」のみ）。
+    UINT64 maxFence = 0;
+    for (int i = 0; i < kCopySlotCount; i++)
+        if (s_copySlots[i].fenceValue > maxFence) maxFence = s_copySlots[i].fenceValue;
+    if (maxFence == 0) return 1;
+
+    UINT64 completed = frameFence->GetCompletedValue();
+    if (completed >= maxFence) return 1;
+
+    HANDLE hEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    if (!hEvent) return 0;
+    int rc = 0;
+    if (SUCCEEDED(frameFence->SetEventOnCompletion(maxFence, hEvent)))
+    {
+        DWORD dw = WaitForSingleObject(hEvent, timeoutMs > 0 ? (DWORD)timeoutMs : INFINITE);
+        rc = (dw == WAIT_OBJECT_0) ? 1 : 0;
+    }
+    CloseHandle(hEvent);
+    return rc;
+}
+
 // teardown 専用の安全網: 破棄予定 swapchain image を参照する未処理 copy を「実行せず完了扱い」に倒し、
 // render thread が destroyed image へ CopyResource する use-after-free を防ぐ。drain（C# 側の有限待機）が
 // timeout した後に呼ぶ。残存 race = render thread が既に該当 event を処理中のケースのみ（この窓は閉じきれない）。
@@ -334,4 +380,60 @@ extern "C" __declspec(dllexport) void CancelPendingCopiesD3D12()
     EnterCriticalSection(&s_ringLock);
     InterlockedExchange(&s_completedTicket, s_enqueuedTicket);
     LeaveCriticalSection(&s_ringLock);
+}
+
+// 共有 GPU メモリ leak 調査用（診断専用・本番経路には影響なし）。
+// ID3D12Device の adapter LUID から IDXGIAdapter3 を解決して cache し、
+// DXGI_MEMORY_SEGMENT_GROUP_LOCAL / _NON_LOCAL の CurrentUsage / Budget を返す。
+// NON_LOCAL = system memory backed segment = タスクマネージャ「共有 GPU メモリ」に対応するはず。
+static IDXGIAdapter3* TryAcquireDxgiAdapter3()
+{
+    if (s_cachedDxgiAdapter3) return s_cachedDxgiAdapter3;
+    if (!s_D3D12) return nullptr;
+
+    // device は render thread cache 優先・main から直読みでも GetDevice() は thread-agnostic（既存方針と同じ）。
+    ID3D12Device* dev = s_cachedD3D12Device
+        ? reinterpret_cast<ID3D12Device*>(s_cachedD3D12Device)
+        : s_D3D12->GetDevice();
+    if (!dev) return nullptr;
+
+    LUID luid = dev->GetAdapterLuid();
+
+    IDXGIFactory4* factory = nullptr;
+    if (FAILED(CreateDXGIFactory1(IID_PPV_ARGS(&factory))) || !factory) return nullptr;
+
+    IDXGIAdapter1* adapter1 = nullptr;
+    HRESULT hr = factory->EnumAdapterByLuid(luid, IID_PPV_ARGS(&adapter1));
+    factory->Release();
+    if (FAILED(hr) || !adapter1) return nullptr;
+
+    IDXGIAdapter3* adapter3 = nullptr;
+    hr = adapter1->QueryInterface(IID_PPV_ARGS(&adapter3));
+    adapter1->Release();
+    if (FAILED(hr) || !adapter3) return nullptr;
+
+    s_cachedDxgiAdapter3 = adapter3;
+    return s_cachedDxgiAdapter3;
+}
+
+extern "C" __declspec(dllexport) int QueryVideoMemoryInfo(
+    uint64_t* localCurrent, uint64_t* localBudget,
+    uint64_t* nonLocalCurrent, uint64_t* nonLocalBudget)
+{
+    if (!localCurrent || !localBudget || !nonLocalCurrent || !nonLocalBudget) return 0;
+    *localCurrent = 0; *localBudget = 0; *nonLocalCurrent = 0; *nonLocalBudget = 0;
+
+    IDXGIAdapter3* adapter3 = TryAcquireDxgiAdapter3();
+    if (!adapter3) return 0;
+
+    DXGI_QUERY_VIDEO_MEMORY_INFO local = {};
+    DXGI_QUERY_VIDEO_MEMORY_INFO nonLocal = {};
+    if (FAILED(adapter3->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_LOCAL, &local))) return 0;
+    if (FAILED(adapter3->QueryVideoMemoryInfo(0, DXGI_MEMORY_SEGMENT_GROUP_NON_LOCAL, &nonLocal))) return 0;
+
+    *localCurrent = local.CurrentUsage;
+    *localBudget = local.Budget;
+    *nonLocalCurrent = nonLocal.CurrentUsage;
+    *nonLocalBudget = nonLocal.Budget;
+    return 1;
 }

@@ -1,11 +1,10 @@
-﻿using System.Runtime.InteropServices;
+using System.Runtime.InteropServices;
 using UnityEngine.Experimental.Rendering;
 using UnityEngine.Rendering;
 using UnityVRMod.Config;
 using UnityVRMod.Core;
 using UnityVRMod.Features.Util;
 using UnityVRMod.Features.VRVisualization.OpenXR;
-
 namespace UnityVRMod.Features.VrVisualization
 {
     internal class VrCameraSetup_CoreOpenXR : IVrCameraSetup
@@ -149,6 +148,8 @@ namespace UnityVRMod.Features.VrVisualization
         // effective overlayMask = _eyeOverlayLayerMask | _vrModelOverlayMask＝main pass から除外（二重描画防止）
         // + post 後の overlay pass で crisp 重ね描き＝UI(layer 30) と同じく最前面化。
         private int _vrModelOverlayMask;
+
+        private System.Action<Camera, RenderTexture> _sceneTransparentRedraw;
 
         private GameObject _currentlyTrackedOriginalCameraGO = null;
         private float _lastCalculatedVerticalOffset;
@@ -429,7 +430,8 @@ namespace UnityVRMod.Features.VrVisualization
                 var swapchainCreateInfo = new XrSwapchainCreateInfo
                 {
                     type = XrStructureType.XR_TYPE_SWAPCHAIN_CREATE_INFO,
-                    usageFlags = XrSwapchainUsageFlags.XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XrSwapchainUsageFlags.XR_SWAPCHAIN_USAGE_SAMPLED_BIT,
+                    // CopyResource の dst として使うため TRANSFER_DST も宣言する（実使用と usage 宣言を一致させる）。
+                    usageFlags = XrSwapchainUsageFlags.XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XrSwapchainUsageFlags.XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT | XrSwapchainUsageFlags.XR_SWAPCHAIN_USAGE_SAMPLED_BIT,
                     format = _selectedSwapchainFormat,
                     sampleCount = view.recommendedSwapchainSampleCount,
                     width = view.recommendedImageRectWidth,
@@ -547,9 +549,33 @@ namespace UnityVRMod.Features.VrVisualization
         // event poll / session 状態管理は下の :341 ガードの前にあり、非 running 時も poll が走り READY で再開する。
         // _input.Sync も同区間で keepalive 中継続＝意図的（pose は _appSpace 基準で rig 非依存・復帰時に即温まる）。
         // 戻り値 = フレームを実際に submit できたか（xrEndFrame 成功）。早期 return / DISCARDED は false。
+        // 共有 GPU メモリ leak 調査用の 1Hz polling 出力（Config が 0 のとき完全 no-op）。
+        // Time.unscaledTime で throttle＝Time.timeScale=0 の menu 中も等間隔に出る。
+        private float _lastDxgiMemLogTime;
+
+        private void PollDxgiMemoryLogIfDue()
+        {
+            if (!_useD3D12) return;
+            int intervalMs = ConfigManager.OpenXR_DxgiMemoryLogIntervalMs?.Value ?? 0;
+            if (intervalMs <= 0) return;
+            float now = Time.unscaledTime;
+            float intervalSec = intervalMs / 1000f;
+            if (_lastDxgiMemLogTime > 0f && now - _lastDxgiMemLogTime < intervalSec) return;
+            _lastDxgiMemLogTime = now;
+            if (!NativeBridge.TryQueryDxgiVideoMemoryInfo(out ulong localCur, out ulong localBudget,
+                out ulong nonLocalCur, out ulong nonLocalBudget)) return;
+            const double MB = 1024.0 * 1024.0;
+            // frame= は per-frame rate 比較用（Step 2 等で fps が変わっても正しい単位で比較できる）。
+            VRModCore.Log(
+                $"[DxgiMem] frame={Time.frameCount} LOCAL: cur={localCur / MB:F0} MB / budget={localBudget / MB:F0} MB, " +
+                $"NON_LOCAL: cur={nonLocalCur / MB:F0} MB / budget={nonLocalBudget / MB:F0} MB");
+        }
+
         private bool PumpFrame()
         {
             if (!IsVrAvailable || _xrSession == OpenXRConstants.XR_NULL_HANDLE) return false;
+
+            PollDxgiMemoryLogIfDue();
 
             PollSessionEvents();
 
@@ -642,6 +668,7 @@ namespace UnityVRMod.Features.VrVisualization
                         GL.IssuePluginEvent(_renderEventFunc, NativeBridge.kEventExecutePendingCopies);
                         if (!NativeBridge.WaitForCopyTicket(lastCopyTicket, ConfigManager.OpenXR_D3D12SubmitWaitMs?.Value ?? 50))
                             VRModCore.LogRuntimeDebug("OpenXR/D3D12: copy submit wait timeout（stale release で続行）。");
+
                     }
                     for (int i = 0; i < 2; i++)
                     {
@@ -690,6 +717,8 @@ namespace UnityVRMod.Features.VrVisualization
             // フレームループが begin/acquire のまま壊れて HMD が固着する（実機 2026-06-09）。
             // 描画をスキップして frame loop を健全に閉じる（直前フレーム面を再提示）。
             if (currentEyeCamera == null) return 0;
+            // 診断: RenderEye 全体を bypass する（acquire/release だけ通して frame loop 維持）。
+            // swapchain image cycle / OpenXR runtime 側の leak かを切り分ける最終手段。
             RenderTexture currentIntermediateRT = (eyeIndex == 0) ? _leftEyeIntermediateRT : _rightEyeIntermediateRT;
             IntPtr nativeTextureResourcePtr = _eyeSwapchainImages[eyeIndex][(int)swapchainImageIndex];
             XrViewConfigurationView viewConfig = _viewConfigViews[eyeIndex];
@@ -738,9 +767,10 @@ namespace UnityVRMod.Features.VrVisualization
             int effectiveOverlayMask = (_eyePpOverrideActive ? _eyeOverlayLayerMask : 0) | _vrModelOverlayMask;
             if (effectiveOverlayMask != 0) eyeMask &= ~effectiveOverlayMask;
             currentEyeCamera.cullingMask = eyeMask;
+            // 診断: cullingMask=0 で scene の全 renderer を cull＝scene draw 0 にする（clear / Camera.Render / URP pipeline setup
+            // / post-process / DrawEyeOverlay は通常実行）。Round 9A で RT サイズ依存と確定後、leak が scene draw 経路の
             // eye の URP post-process（PostProcessCoordinator が push）も描画直前にここで適用する（単一所有点）。
             ApplyEyePostProcessOverride(currentEyeCamera);
-            currentEyeCamera.enabled = true;
 
             XrPosef eyePose = _locatedViews[eyeIndex].pose;
             Vector3 position = new(eyePose.position.x, eyePose.position.y, -eyePose.position.z);
@@ -756,27 +786,41 @@ namespace UnityVRMod.Features.VrVisualization
             projM = Matrix4x4.Scale(new Vector3(1, -1, 1)) * projM;
             currentEyeCamera.projectionMatrix = projM;
 
-            bool originalInvertCulling = GL.invertCulling;
-            GL.invertCulling = true;
-            currentEyeCamera.Render();
-            // post 後に overlay layer（VR ビジュアル）を post 無しで intermediate RT へ直接重ねる
-            //（本描画と同じ invertCulling=true 区間＝winding 一致。copy/flush より前。MSAA 面に積み自動 resolve）。
-            DrawEyeOverlay(currentEyeCamera, currentIntermediateRT);
-            GL.invertCulling = originalInvertCulling;
-            Graphics.ExecuteCommandBuffer(_flushCommandBuffer);
-            RenderTexture.active = null;
-
-            if (currentIntermediateRT != null && currentIntermediateRT.IsCreated())
+            try
             {
-                IntPtr sourceNativePtr = currentIntermediateRT.GetNativeTexturePtr();
-                if (sourceNativePtr != IntPtr.Zero && nativeTextureResourcePtr != IntPtr.Zero)
+                bool originalInvertCulling = GL.invertCulling;
+                GL.invertCulling = true;
+                currentEyeCamera.Render();
+                // 後段 transparent redraw（leak 回避で scene draw から除外した透過 MR の再描画）。
+                // GL.invertCulling=true 区間内＝winding は本描画と一致。post 後の intermediate RT に直接描く。
+                _sceneTransparentRedraw?.Invoke(currentEyeCamera, currentIntermediateRT);
+                // post 後に overlay layer（VR ビジュアル）を post 無しで intermediate RT へ直接重ねる
+                //（本描画と同じ invertCulling=true 区間＝winding 一致。copy/flush より前。MSAA 面に積み自動 resolve）。
+                DrawEyeOverlay(currentEyeCamera, currentIntermediateRT);
+                GL.invertCulling = originalInvertCulling;
+                Graphics.ExecuteCommandBuffer(_flushCommandBuffer);
+                RenderTexture.active = null;
+
+                if (currentIntermediateRT != null && currentIntermediateRT.IsCreated())
                 {
-                    if (_useD3D12)
-                        return NativeBridge.EnqueueCopyD3D12_Internal(sourceNativePtr, nativeTextureResourcePtr); // 実行は PumpFrame 側の event 発行で
-                    NativeBridge.DirectCopyResource_Internal(nativeTextureResourcePtr, sourceNativePtr);
+                    // 診断: swapchain copy 経路（GetNativeTexturePtr + CopyResource）を bypass。intermediate RT への描画は行われるが
+                    IntPtr sourceNativePtr = currentIntermediateRT.GetNativeTexturePtr();
+                    if (sourceNativePtr != IntPtr.Zero && nativeTextureResourcePtr != IntPtr.Zero)
+                    {
+                        if (_useD3D12)
+                            return NativeBridge.EnqueueCopyD3D12_Internal(sourceNativePtr, nativeTextureResourcePtr); // 実行は PumpFrame 側の event 発行で
+                        NativeBridge.DirectCopyResource_Internal(nativeTextureResourcePtr, sourceNativePtr);
+                    }
                 }
+                return 0;
             }
-            return 0;
+            finally
+            {
+                // 設計不変条件 (ConfigureVrCamera 参照): 本カメラは enabled=false で手動描画のみ。
+                // auto-render が URP intermediate RT を二重に走らせて共有 GPU メモリを leak させるのを防ぐ
+                // (vr-shared-gpu-memory-leak.md / plans/2026-06-23-vr-leak-fix-eyecam-autorender.md)。
+                currentEyeCamera.enabled = false;
+            }
         }
 
         private void PopulateProjectionLayer()
@@ -1292,6 +1336,7 @@ namespace UnityVRMod.Features.VrVisualization
             _eyeOverlayOccluderMask = 0;    // 同上（コントローラ遮蔽も無効で開始）。material は companion 所有＝ここでは参照を捨てるのみ。
             _eyeOverlayOccluderMat = null;
             _vrModelOverlayMask = 0;        // VR モデル overlay も無効で開始（HandLightingRunner が次フレ再 push）。
+            _sceneTransparentRedraw = null;
         }
 
         public void TeardownVr()
@@ -1479,6 +1524,11 @@ namespace UnityVRMod.Features.VrVisualization
         public void SetVrModelOverlay(int mask)
         {
             _vrModelOverlayMask = mask;
+        }
+
+        public void SetSceneTransparentRedraw(System.Action<Camera, RenderTexture> callback)
+        {
+            _sceneTransparentRedraw = callback;
         }
 
         public bool SetTransitionOverlayTexture(System.IntPtr nativeTex, int srcWidth, int srcHeight, float uMin, float vMin, float uMax, float vMax)

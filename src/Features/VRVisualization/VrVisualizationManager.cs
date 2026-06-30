@@ -180,6 +180,9 @@ namespace UnityVRMod.Features.VrVisualization
         internal void SetVrModelOverlay(int mask)
             => _cameraSetup?.SetVrModelOverlay(mask);
 
+        internal void SetSceneTransparentRedraw(System.Action<Camera, RenderTexture> callback)
+            => _cameraSetup?.SetSceneTransparentRedraw(callback);
+
         // 正面リセット passthrough（IsVrReady ガードしない＝fork 側で session/space を判定）。
         internal void RequestRecenter()
             => _cameraSetup?.RequestRecenter();

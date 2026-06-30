@@ -32,7 +32,8 @@ namespace UnityVRMod.Features.VRVisualization.OpenXR
             var info = new XrSwapchainCreateInfo
             {
                 type = XrStructureType.XR_TYPE_SWAPCHAIN_CREATE_INFO,
-                usageFlags = XrSwapchainUsageFlags.XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XrSwapchainUsageFlags.XR_SWAPCHAIN_USAGE_SAMPLED_BIT,
+                // quad swapchain も TryStage() で D3D12 CopyResource の dst として使うため TRANSFER_DST を宣言する。
+                usageFlags = XrSwapchainUsageFlags.XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XrSwapchainUsageFlags.XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT | XrSwapchainUsageFlags.XR_SWAPCHAIN_USAGE_SAMPLED_BIT,
                 format = format,
                 sampleCount = 1,
                 width = (uint)width,
