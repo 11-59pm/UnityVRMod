@@ -82,6 +82,9 @@ namespace UnityVRMod.Core
         // 判定したい消費側はこれも併せて見る。未 init / feature 不在は true（= VR 非提示扱い）。
         public static bool IsUserSafeModeActive => VrVisualizationFeature?.IsUserSafeModeActive ?? true;
 
+        /// <summary>セーフモードを切り替える（companion から呼ぶ public API）。</summary>
+        public static void ToggleUserSafeMode() => VrVisualizationFeature?.ToggleUserSafeMode();
+
         // XR セッション running（= runtime の xrWaitFrame スロットルが効いている）。IsVrActive（rig ready）は
         // READY 待ち中も true になるため、フレームペーシング系はこちらも併せて見ること。未 init は false。
         public static bool IsXrSessionRunning => VrVisualizationFeature?.IsXrSessionRunning ?? false;
