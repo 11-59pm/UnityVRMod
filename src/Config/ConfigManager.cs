@@ -31,7 +31,6 @@ namespace UnityVRMod.Config
         public static ConfigElement<int> OpenXR_SwapchainWaitTimeoutMs;
         public static ConfigElement<int> OpenXR_D3D12SubmitWaitMs;
         public static ConfigElement<int> OpenXR_DxgiMemoryLogIntervalMs;
-        public static ConfigElement<bool> OpenXR_LeakFixEnabled;
         public static ConfigElement<OpenXrStandbyMode> OpenXR_StandbyMode;
         public static ConfigElement<float> OpenXR_StandbyTeardownSec;
         public static ConfigElement<float> OpenXR_StandbyReattachProbeSec;
@@ -146,10 +145,6 @@ namespace UnityVRMod.Config
                 "LOCAL / NON_LOCAL CurrentUsage and Budget to BepInEx log. Used to check whether the shared GPU memory " +
                 "increase reported by Task Manager corresponds to the D3D12 NON_LOCAL segment. " +
                 "0 = disabled (default). 1000 = 1 Hz polling. Takes effect live.", 0);
-            OpenXR_LeakFixEnabled = new ConfigElement<bool>(
-                "OpenXR Leak Fix Enabled",
-                "環境物の material を per-renderer clone して D3D12 NON_LOCAL leak を防ぐ。見た目の変化なし。",
-                true);
             OpenXR_StandbyMode = new ConfigElement<OpenXrStandbyMode>("OpenXR Standby Mode",
                 "[OpenXR ONLY] What to do when the session goes non-running (HMD doffed / standby). " +
                 "SoftPark (default): keep the OpenXR instance alive, return rendering to the desktop, poll events only, " +
