@@ -114,3 +114,5 @@ These settings only apply if you are using an **OpenVR** build.
   * Core VR injection for OpenXR and OpenVR is stable.
   * Some testing features are included for configuration live reloading.
   * Stub VR Abstraction layer class. This will be used by the next features for a truly backend-agnostic experience.
+
+**
